@@ -4189,7 +4189,7 @@ const demoMileageTrips: MileageTrip[] = [
      setSelectedInvoiceForDoc(updatedInvoice); setIsPdfPreviewOpen(true);
   };
   const handleExportPLPDF = () => {
-    setPlExportRequested(true);
+    setPlExportRequested(false);
     openPLPreview();
   };
 
@@ -7055,12 +7055,11 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                     </div>
                   </div>
                   <button
-                    onClick={shareProPLPDF}
-                    disabled={isGeneratingProPLPdf}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg font-semibold text-sm flex items-center gap-2 transition-colors disabled:cursor-not-allowed"
+                    onClick={handleExportPLPDF}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold text-sm flex items-center gap-2 transition-colors"
                   >
-                    {isGeneratingProPLPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-                    <span>{isGeneratingProPLPdf ? 'Preparing...' : 'Share report'}</span>
+                    <Eye className="w-4 h-4" />
+                    <span>Export PDF</span>
                   </button>
                 </div>
 
@@ -7881,26 +7880,6 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                       </div>
 
                       <div className="flex items-center gap-2">
-                        {!isGeneratingPLPdf && !plExportRequested && (
-                          <>
-                            <button
-                              onClick={sharePLPDF}
-                              className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-semibold text-sm flex items-center gap-2 transition-colors"
-                            >
-                              <Share2 className="w-4 h-4" />
-                              <span className="hidden sm:inline">Share</span>
-                            </button>
-
-                            <button
-                              onClick={() => setPlExportRequested(true)}
-                              className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold text-sm flex items-center gap-2 transition-colors"
-                            >
-                              <Download className="w-4 h-4" />
-                              <span className="hidden sm:inline">Download PDF</span>
-                            </button>
-                          </>
-                        )}
-
                         <button
                           onClick={() => { setPlExportRequested(false); closePLPreview(); }}
                           className="w-11 h-11 flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
@@ -8039,103 +8018,14 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                     </div>
 
                     {/* Modal Footer */}
-                    <div className="flex items-center justify-end gap-3 p-6 border-t border-slate-200">
+                    <div className="flex items-center justify-end gap-3 p-6 border-t border-slate-200 bg-white">
                       <button
-                        onClick={closePLPreview}
-                        className="px-6 py-3 border border-slate-300 dark:border-slate-700 rounded-lg font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                        onClick={sharePLPDF}
+                        disabled={isGeneratingPLPdf}
+                        className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Close
-                      </button>
-                      <button
-                        onClick={async () => {
-                          setIsGeneratingPDF(true);
-                          try {
-                            const element = document.getElementById('pl-pdf-preview-content');
-                            if (!element) throw new Error('Preview content not found');
-                            
-                            const periodLabel = plPeriodType === 'month' 
-                              ? referenceDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-                              : plPeriodType === 'quarter' 
-                                ? `Q${Math.floor(referenceDate.getMonth() / 3) + 1} ${referenceDate.getFullYear()}`
-                                : plPeriodType === 'year'
-                                  ? referenceDate.getFullYear().toString()
-                                  : 'All-Time';
-                            
-                            // IMPORTANT (iPhone/Safari): getBoundingClientRect() can under-report height for
-                            // long, scrollable content, which causes the bottom of the PDF (notes/footer) to be cut off.
-                            // Solution: clone to an off-screen wrapper (no scroll clipping) and size the PDF
-                            // to the full scrollHeight so the export is ONE long page (no page breaks).
-                            let cloneWrapper: HTMLDivElement | null = null;
-                            try {
-                              const source = element as HTMLElement;
-
-                              cloneWrapper = document.createElement('div');
-                              cloneWrapper.style.position = 'fixed';
-                              cloneWrapper.style.left = '-100000px';
-                              cloneWrapper.style.top = '0';
-                              cloneWrapper.style.width = `${source.scrollWidth}px`;
-                              cloneWrapper.style.background = '#ffffff';
-                              cloneWrapper.style.padding = '0';
-                              cloneWrapper.style.margin = '0';
-                              cloneWrapper.style.zIndex = '-1';
-
-                              const clone = prepareProfitLossPdfClone(source);
-
-                              cloneWrapper.appendChild(clone);
-                              document.body.appendChild(cloneWrapper);
-
-                              await new Promise(resolve => requestAnimationFrame(() => resolve(true)));
-
-                              const contentWidth = clone.scrollWidth;
-                              const contentHeight = clone.scrollHeight;
-
-                              const pxToMm = 0.264583; // 96 DPI px -> mm
-                              const pageWidthMm = 210;
-                              const marginMm = 8;
-                              const contentWidthMm = pageWidthMm - (marginMm * 2);
-
-                              const scaleFactor = contentWidthMm / (contentWidth * pxToMm);
-                              const pageHeightMm = Math.ceil((contentHeight * pxToMm * scaleFactor) + (marginMm * 2) + 2);
-
-                              const opt = {
-                                margin: [marginMm, marginMm, marginMm, marginMm],
-                                filename: `PL-Statement-${periodLabel.replace(/\s+/g, '-')}.pdf`,
-                                image: { type: 'jpeg', quality: 0.95 },
-                                html2canvas: {
-                                  scale: 2,
-                                  useCORS: true,
-                                  backgroundColor: '#ffffff',
-                                  logging: false,
-                                  scrollY: 0,
-                                  scrollX: 0,
-                                  windowWidth: contentWidth,
-                                  windowHeight: contentHeight
-                                },
-                                jsPDF: {
-                                  unit: 'mm',
-                                  format: [pageWidthMm, Math.max(297, pageHeightMm)],
-                                  orientation: 'portrait'
-                                },
-                                pagebreak: { mode: 'avoid-all' }
-                              };
-
-                              await html2pdf().set(opt).from(clone).save();
-                            } finally {
-                              if (cloneWrapper && cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
-                            }
-                            showToast('PDF exported successfully!', 'success');
-                            setTimeout(() => closePLPreview(), 1000);
-                          } catch (error) {
-                            console.error('PDF generation error:', error);
-                            showToast('Failed to generate PDF. Please try again.', 'error');
-                          }
-                          setIsGeneratingPDF(false);
-                        }}
-                        disabled={isGeneratingPDF}
-                        className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
-                      >
-                        <Download className="w-4 h-4" />
-                        {isGeneratingPDF ? 'Generating...' : 'Export PDF'}
+                        {isGeneratingPLPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+                        {isGeneratingPLPdf ? 'Preparing...' : 'SHARE'}
                       </button>
                     </div>
                   </div>
