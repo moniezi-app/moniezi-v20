@@ -1181,6 +1181,7 @@ export default function App() {
   const [plShowPreparedBy, setPlShowPreparedBy] = useState(true);
   const [plShowAddress, setPlShowAddress] = useState(true);
   const [showProPLPreview, setShowProPLPreview] = useState(false);
+  const [showProPLExportSheet, setShowProPLExportSheet] = useState(false);
   const [isGeneratingProPLPdf, setIsGeneratingProPLPdf] = useState(false);
   const [seedSuccess, setSeedSuccess] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
@@ -4748,95 +4749,145 @@ const demoMileageTrips: MileageTrip[] = [
   };
 
 
-  // Share PDF for Profit & Loss (uses Web Share API when available; falls back to download)
-  const shareProPLPDF = async () => {
-    if (isGeneratingProPLPdf) return;
-    setIsGeneratingProPLPdf(true);
+  const getProPLPdfFilename = () => {
+    const safeBusiness = (settings.businessName || 'Business').replace(/[^a-z0-9]/gi, '_');
+    const safeDate = new Date().toISOString().slice(0, 10);
+    return `PL_${safeBusiness}_${safeDate}.pdf`;
+  };
+
+  const buildProPLPdfBlob = async (): Promise<{ blob: Blob; filename: string }> => {
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const element = document.getElementById('pro-pl-pdf-content');
+    if (!element) throw new Error('P&L content not found');
+
+    const images = Array.from(element.querySelectorAll('img'));
+    await Promise.all(images.map(img => {
+      if ((img as HTMLImageElement).complete) return Promise.resolve();
+      return new Promise(resolve => { (img as HTMLImageElement).onload = resolve as any; (img as HTMLImageElement).onerror = resolve as any; setTimeout(resolve, 2000); });
+    }));
+
     let cloneWrapper: HTMLDivElement | null = null;
 
     try {
-      await new Promise(resolve => setTimeout(resolve, 300));
-      const element = document.getElementById('pro-pl-pdf-content');
-      if (!element) throw new Error('P&L content not found');
+      const source = element as HTMLElement;
 
-      // Ensure images are loaded (logo)
-      const images = Array.from(element.querySelectorAll('img'));
-      await Promise.all(images.map(img => {
-        if ((img as HTMLImageElement).complete) return Promise.resolve();
-        return new Promise(resolve => { (img as HTMLImageElement).onload = resolve as any; (img as HTMLImageElement).onerror = resolve as any; setTimeout(resolve, 2000); });
-      }));
-
-      // Clone to a fixed-width wrapper to measure full height reliably (especially on iOS)
       cloneWrapper = document.createElement('div');
       cloneWrapper.style.position = 'fixed';
-      cloneWrapper.style.left = '-99999px';
+      cloneWrapper.style.left = '-100000px';
       cloneWrapper.style.top = '0';
-      cloneWrapper.style.width = '800px';
+      cloneWrapper.style.width = `${Math.max(source.scrollWidth, 800)}px`;
       cloneWrapper.style.background = '#ffffff';
       cloneWrapper.style.padding = '0';
       cloneWrapper.style.margin = '0';
       cloneWrapper.style.zIndex = '-1';
 
-      const clone = element.cloneNode(true) as HTMLElement;
-      (clone as HTMLElement).style.width = '800px';
-      (clone as HTMLElement).style.maxWidth = '800px';
-      (clone as HTMLElement).style.margin = '0';
-      (clone as HTMLElement).style.borderRadius = '0';
-      (clone as HTMLElement).style.boxShadow = 'none';
+      const clone = prepareProfitLossPdfClone(source);
+      clone.style.width = `${Math.max(source.scrollWidth, 800)}px`;
+      clone.style.maxWidth = 'none';
+      clone.style.margin = '0';
+      clone.style.borderRadius = '0';
+      clone.style.boxShadow = 'none';
 
       cloneWrapper.appendChild(clone);
       document.body.appendChild(cloneWrapper);
 
-      // Force layout + capture accurate content height
-      await new Promise(resolve => requestAnimationFrame(() => resolve(null)));
-      const contentWidth = clone.scrollWidth || 800;
+      await new Promise(resolve => requestAnimationFrame(() => resolve(true)));
+      const contentWidth = clone.scrollWidth || Math.max(source.scrollWidth, 800);
       const contentHeight = clone.scrollHeight || clone.getBoundingClientRect().height || 1200;
 
-      // Convert px->mm (assuming 96dpi; good enough for single-page export)
-      const pxToMm = (px: number) => (px * 25.4) / 96;
-      const pageWidthMm = 210; // A4 width
-      const pageHeightMm = Math.max(297, pxToMm(contentHeight) * (pageWidthMm / pxToMm(contentWidth)));
-
-      const title = (settings.businessName || 'Business').replace(/[^a-z0-9]/gi, '_');
-      const filename = `PL_${title}_${new Date().toISOString().slice(0,10)}.pdf`;
+      const pxToMm = 0.264583;
+      const pageWidthMm = 210;
+      const marginMm = 8;
+      const contentWidthMm = pageWidthMm - (marginMm * 2);
+      const scaleFactor = contentWidthMm / (contentWidth * pxToMm);
+      const pageHeightMm = Math.ceil((contentHeight * pxToMm * scaleFactor) + (marginMm * 2) + 2);
+      const filename = getProPLPdfFilename();
 
       const opt = {
-        margin: 0,
+        margin: [marginMm, marginMm, marginMm, marginMm],
         filename,
-        image: { type: 'jpeg', quality: 0.98 },
+        image: { type: 'jpeg', quality: 0.95 },
         html2canvas: {
           scale: 2,
           useCORS: true,
           backgroundColor: '#ffffff',
+          logging: false,
           scrollY: 0,
+          scrollX: 0,
           windowWidth: contentWidth,
           windowHeight: contentHeight
         },
         jsPDF: {
           unit: 'mm',
-          format: [pageWidthMm, pageHeightMm],
+          format: [pageWidthMm, Math.max(297, pageHeightMm)],
           orientation: 'portrait'
         },
         pagebreak: { mode: 'avoid-all' }
       };
 
       const worker = html2pdf().set(opt).from(clone);
-
-      // Try to get a Blob without forcing a download
       let blob: Blob | null = null;
       try {
-        if (typeof worker.outputPdf === 'function') {
-          blob = await worker.outputPdf('blob');
+        if (typeof (worker as any).outputPdf === 'function') {
+          blob = await (worker as any).outputPdf('blob');
         }
       } catch {}
 
       if (!blob) {
-        await worker.toPdf();
-        const pdf = await worker.get('pdf');
+        await (worker as any).toPdf();
+        const pdf = await (worker as any).get('pdf');
         blob = pdf.output('blob');
       }
 
-      const file = new File([blob!], filename, { type: 'application/pdf' });
+      return { blob: blob!, filename };
+    } finally {
+      if (cloneWrapper && cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
+    }
+  };
+
+  const downloadBlobFile = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  };
+
+  const previewProPLPDF = () => {
+    if (isGeneratingProPLPdf) return;
+    setShowProPLExportSheet(false);
+    setShowProPLPreview(true);
+  };
+
+  const saveProPLPDF = async () => {
+    if (isGeneratingProPLPdf) return;
+    setIsGeneratingProPLPdf(true);
+    setShowProPLExportSheet(false);
+
+    try {
+      const { blob, filename } = await buildProPLPdfBlob();
+      downloadBlobFile(blob, filename);
+      showToast('PDF saved to Downloads', 'success');
+    } catch (error) {
+      console.error('P&L save error:', error);
+      showToast('Save failed', 'error');
+    } finally {
+      setIsGeneratingProPLPdf(false);
+    }
+  };
+
+  const shareProPLPDF = async () => {
+    if (isGeneratingProPLPdf) return;
+    setIsGeneratingProPLPdf(true);
+    setShowProPLExportSheet(false);
+
+    try {
+      const { blob, filename } = await buildProPLPdfBlob();
+      const file = new File([blob], filename, { type: 'application/pdf' });
       const navAny = navigator as any;
       const canShareFiles = !!navAny.share && (!navAny.canShare || navAny.canShare({ files: [file] }));
 
@@ -4848,16 +4899,13 @@ const demoMileageTrips: MileageTrip[] = [
         });
         showToast('Share opened', 'success');
       } else {
-        // Fallback: download
-        await html2pdf().set(opt).from(clone).save();
-        showToast('PDF exported!', 'success');
+        downloadBlobFile(blob, filename);
+        showToast('Sharing not available. PDF saved instead.', 'success');
       }
-
     } catch (error) {
-      console.error('P&L Share error:', error);
-      showToast('Share/Export failed', 'error');
+      console.error('P&L share error:', error);
+      showToast('Share failed', 'error');
     } finally {
-      if (cloneWrapper && cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
       setIsGeneratingProPLPdf(false);
     }
   };
@@ -7036,11 +7084,11 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                     </div>
                   </div>
                   <button
-                    onClick={() => setShowProPLPreview(true)}
+                    onClick={() => setShowProPLExportSheet(true)}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold text-sm flex items-center gap-2 transition-colors"
                   >
                     <Eye className="w-4 h-4" />
-                    <span>Preview & Export</span>
+                    <span>Export PDF</span>
                   </button>
                 </div>
 
@@ -8168,6 +8216,43 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
            </div>
         )}
 
+        {showProPLExportSheet && (
+          <div className="fixed inset-0 z-[105] bg-black/50 backdrop-blur-sm flex items-end justify-center sm:items-center p-0 sm:p-4 modal-overlay">
+            <div className="w-full sm:max-w-md bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+              <div className="px-5 pt-5 pb-4 border-b border-slate-200 dark:border-slate-800">
+                <div className="text-sm font-extrabold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Export Profit &amp; Loss PDF</div>
+                <div className="text-sm text-slate-600 dark:text-slate-300 mt-2">Choose exactly what you want to do on your phone.</div>
+              </div>
+              <div className="p-3 space-y-2">
+                <button onClick={previewProPLPDF} disabled={isGeneratingProPLPdf} className="w-full text-left flex items-center gap-3 px-4 py-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-60">
+                  <div className="w-11 h-11 rounded-xl bg-blue-50 dark:bg-blue-950/40 flex items-center justify-center text-blue-600 dark:text-blue-300 shrink-0"><Eye className="w-5 h-5" /></div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-900 dark:text-white">Preview report</div>
+                    <div className="text-sm text-slate-500 dark:text-slate-400">Open the in-app preview first.</div>
+                  </div>
+                </button>
+                <button onClick={saveProPLPDF} disabled={isGeneratingProPLPdf} className="w-full text-left flex items-center gap-3 px-4 py-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-60">
+                  <div className="w-11 h-11 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 flex items-center justify-center text-emerald-600 dark:text-emerald-300 shrink-0"><Download className="w-5 h-5" /></div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-900 dark:text-white">Save to phone</div>
+                    <div className="text-sm text-slate-500 dark:text-slate-400">Download the PDF without auto-opening another app.</div>
+                  </div>
+                </button>
+                <button onClick={shareProPLPDF} disabled={isGeneratingProPLPdf} className="w-full text-left flex items-center gap-3 px-4 py-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-60">
+                  <div className="w-11 h-11 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-200 shrink-0"><Share2 className="w-5 h-5" /></div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-900 dark:text-white">Share report</div>
+                    <div className="text-sm text-slate-500 dark:text-slate-400">Send it with your phone's native share sheet.</div>
+                  </div>
+                </button>
+              </div>
+              <div className="px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-1">
+                <button onClick={() => setShowProPLExportSheet(false)} className="w-full px-4 py-3 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Pro P&L Preview Modal - OUTSIDE Reports conditional for proper rendering */}
         {showProPLPreview && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-stretch justify-stretch p-0 modal-overlay">
@@ -8188,87 +8273,15 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                     className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg font-semibold text-sm flex items-center gap-2 transition-colors disabled:opacity-50"
                   >
                     <Share2 size={16} />
-                    <span>Share</span>
+                    <span>Share report</span>
                   </button>
                 <button
-                  onClick={async () => {
-                    setIsGeneratingProPLPdf(true);
-                    try {
-                      await new Promise(resolve => setTimeout(resolve, 300));
-                      const element = document.getElementById('pro-pl-pdf-content');
-                      if (!element) throw new Error('Preview content not found');
-
-                      // Same iPhone-safe export logic as above: clone off-screen, measure full scrollHeight,
-                      // and size the PDF to a single long page so nothing is cut off.
-                      let cloneWrapper: HTMLDivElement | null = null;
-                      try {
-                        const source = element as HTMLElement;
-
-                        cloneWrapper = document.createElement('div');
-                        cloneWrapper.style.position = 'fixed';
-                        cloneWrapper.style.left = '-100000px';
-                        cloneWrapper.style.top = '0';
-                        cloneWrapper.style.width = `${source.scrollWidth}px`;
-                        cloneWrapper.style.background = '#ffffff';
-                        cloneWrapper.style.padding = '0';
-                        cloneWrapper.style.margin = '0';
-                        cloneWrapper.style.zIndex = '-1';
-
-                        const clone = prepareProfitLossPdfClone(source);
-
-                        cloneWrapper.appendChild(clone);
-                        document.body.appendChild(cloneWrapper);
-
-                        await new Promise(resolve => requestAnimationFrame(() => resolve(true)));
-
-                        const contentWidth = clone.scrollWidth;
-                        const contentHeight = clone.scrollHeight;
-
-                        const pxToMm = 0.264583;
-                        const pageWidthMm = 210;
-                        const marginMm = 8;
-                        const contentWidthMm = pageWidthMm - (marginMm * 2);
-                        const scaleFactor = contentWidthMm / (contentWidth * pxToMm);
-                        const pageHeightMm = Math.ceil((contentHeight * pxToMm * scaleFactor) + (marginMm * 2) + 2);
-
-                        const opt = {
-                          margin: [marginMm, marginMm, marginMm, marginMm],
-                          filename: `PL_${settings.businessName.replace(/[^a-z0-9]/gi, '_')}_${proPLData.startDate.toISOString().split('T')[0]}.pdf`,
-                          image: { type: 'jpeg', quality: 0.95 },
-                          html2canvas: {
-                            scale: 2,
-                            useCORS: true,
-                            backgroundColor: '#ffffff',
-                            logging: false,
-                            scrollY: 0,
-                            scrollX: 0,
-                            windowWidth: contentWidth,
-                            windowHeight: contentHeight
-                          },
-                          jsPDF: {
-                            unit: 'mm',
-                            format: [pageWidthMm, Math.max(297, pageHeightMm)],
-                            orientation: 'portrait'
-                          },
-                          pagebreak: { mode: 'avoid-all' }
-                        };
-
-                        await html2pdf().set(opt).from(clone).save();
-                      } finally {
-                        if (cloneWrapper && cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
-                      }
-                      showToast('PDF exported!', 'success');
-                    } catch (error) {
-                      console.error('PDF error:', error);
-                      showToast('Export failed', 'error');
-                    }
-                    setIsGeneratingProPLPdf(false);
-                  }}
+                  onClick={saveProPLPDF}
                   disabled={isGeneratingProPLPdf}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold text-sm flex items-center gap-2 transition-colors disabled:opacity-50"
                 >
                   {isGeneratingProPLPdf ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-                  <span>{isGeneratingProPLPdf ? 'Exporting...' : 'Download PDF'}</span>
+                  <span>{isGeneratingProPLPdf ? 'Saving...' : 'Save to phone'}</span>
                 </button>
                 </div>
               </div>
