@@ -1180,6 +1180,7 @@ export default function App() {
   const [plAccountingBasis, setPlAccountingBasis] = useState<'cash' | 'accrual'>('cash');
   const [plShowPreparedBy, setPlShowPreparedBy] = useState(true);
   const [plShowAddress, setPlShowAddress] = useState(true);
+  const [showProPLPreview, setShowProPLPreview] = useState(false);
   const [isGeneratingProPLPdf, setIsGeneratingProPLPdf] = useState(false);
   const [seedSuccess, setSeedSuccess] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
@@ -1815,8 +1816,8 @@ export default function App() {
   }, [isEstimatePdfPreviewOpen, lockBodyScroll, unlockBodyScroll]);
 
   useEffect(() => {
-    if (showPLPreview) { lockBodyScroll(); return () => { unlockBodyScroll(); }; }
-  }, [showPLPreview, lockBodyScroll, unlockBodyScroll]);
+    if (showPLPreview || showProPLPreview) { lockBodyScroll(); return () => { unlockBodyScroll(); }; }
+  }, [showPLPreview, showProPLPreview, lockBodyScroll, unlockBodyScroll]);
 
   useEffect(() => {
     if (showHelpModal) { lockBodyScroll(); return () => { unlockBodyScroll(); }; }
@@ -4189,7 +4190,7 @@ const demoMileageTrips: MileageTrip[] = [
      setSelectedInvoiceForDoc(updatedInvoice); setIsPdfPreviewOpen(true);
   };
   const handleExportPLPDF = () => {
-    setPlExportRequested(false);
+    setPlExportRequested(true);
     openPLPreview();
   };
 
@@ -4747,59 +4748,57 @@ const demoMileageTrips: MileageTrip[] = [
   };
 
 
-  const getProPLPdfFilename = () => {
-    const safeBusiness = (settings.businessName || 'Business').replace(/[^a-z0-9]/gi, '_');
-    const safeDate = new Date().toISOString().slice(0, 10);
-    return `PL_${safeBusiness}_${safeDate}.pdf`;
-  };
-
-  const buildProPLPdfBlob = async (): Promise<{ blob: Blob; filename: string }> => {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const element = document.getElementById('pro-pl-pdf-content');
-    if (!element) throw new Error('P&L content not found');
-
-    const images = Array.from(element.querySelectorAll('img'));
-    await Promise.all(images.map(img => {
-      if ((img as HTMLImageElement).complete) return Promise.resolve();
-      return new Promise(resolve => { (img as HTMLImageElement).onload = resolve as any; (img as HTMLImageElement).onerror = resolve as any; setTimeout(resolve, 2000); });
-    }));
-
+  // Share PDF for Profit & Loss preview using the native OS share sheet when available.
+  // Falls back to a normal download only on browsers that cannot share files.
+  const shareProPLPDF = async () => {
+    if (isGeneratingProPLPdf) return;
+    setIsGeneratingProPLPdf(true);
     let cloneWrapper: HTMLDivElement | null = null;
 
     try {
-      const source = element as HTMLElement;
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const element = document.getElementById('pro-pl-pdf-content');
+      if (!element) throw new Error('P&L content not found');
 
+      const images = Array.from(element.querySelectorAll('img'));
+      await Promise.all(images.map(img => {
+        if ((img as HTMLImageElement).complete) return Promise.resolve(true);
+        return new Promise(resolve => {
+          (img as HTMLImageElement).onload = () => resolve(true);
+          (img as HTMLImageElement).onerror = () => resolve(true);
+          setTimeout(() => resolve(true), 2000);
+        });
+      }));
+
+      const source = element as HTMLElement;
       cloneWrapper = document.createElement('div');
       cloneWrapper.style.position = 'fixed';
       cloneWrapper.style.left = '-100000px';
       cloneWrapper.style.top = '0';
-      cloneWrapper.style.width = `${Math.max(source.scrollWidth, 800)}px`;
+      cloneWrapper.style.width = `${source.scrollWidth}px`;
       cloneWrapper.style.background = '#ffffff';
       cloneWrapper.style.padding = '0';
       cloneWrapper.style.margin = '0';
       cloneWrapper.style.zIndex = '-1';
 
       const clone = prepareProfitLossPdfClone(source);
-      clone.style.width = `${Math.max(source.scrollWidth, 800)}px`;
-      clone.style.maxWidth = 'none';
-      clone.style.margin = '0';
-      clone.style.borderRadius = '0';
-      clone.style.boxShadow = 'none';
-
       cloneWrapper.appendChild(clone);
       document.body.appendChild(cloneWrapper);
 
       await new Promise(resolve => requestAnimationFrame(() => resolve(true)));
-      const contentWidth = clone.scrollWidth || Math.max(source.scrollWidth, 800);
-      const contentHeight = clone.scrollHeight || clone.getBoundingClientRect().height || 1200;
 
+      const contentWidth = clone.scrollWidth;
+      const contentHeight = clone.scrollHeight;
       const pxToMm = 0.264583;
       const pageWidthMm = 210;
       const marginMm = 8;
       const contentWidthMm = pageWidthMm - (marginMm * 2);
       const scaleFactor = contentWidthMm / (contentWidth * pxToMm);
       const pageHeightMm = Math.ceil((contentHeight * pxToMm * scaleFactor) + (marginMm * 2) + 2);
-      const filename = getProPLPdfFilename();
+
+      const businessNameSafe = (settings.businessName || 'Business').replace(/[^a-z0-9]/gi, '_');
+      const startDateSafe = proPLData.startDate.toISOString().split('T')[0];
+      const filename = `PL_${businessNameSafe}_${startDateSafe}.pdf`;
 
       const opt = {
         margin: [marginMm, marginMm, marginMm, marginMm],
@@ -4825,6 +4824,7 @@ const demoMileageTrips: MileageTrip[] = [
 
       const worker = html2pdf().set(opt).from(clone);
       let blob: Blob | null = null;
+
       try {
         if (typeof (worker as any).outputPdf === 'function') {
           blob = await (worker as any).outputPdf('blob');
@@ -4837,47 +4837,6 @@ const demoMileageTrips: MileageTrip[] = [
         blob = pdf.output('blob');
       }
 
-      return { blob: blob!, filename };
-    } finally {
-      if (cloneWrapper && cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
-    }
-  };
-
-  const downloadBlobFile = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.rel = 'noopener';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
-  };
-
-
-  const saveProPLPDF = async () => {
-    if (isGeneratingProPLPdf) return;
-    setIsGeneratingProPLPdf(true);
-
-    try {
-      const { blob, filename } = await buildProPLPdfBlob();
-      downloadBlobFile(blob, filename);
-      showToast('PDF saved to Downloads', 'success');
-    } catch (error) {
-      console.error('P&L save error:', error);
-      showToast('Save failed', 'error');
-    } finally {
-      setIsGeneratingProPLPdf(false);
-    }
-  };
-
-  const shareProPLPDF = async () => {
-    if (isGeneratingProPLPdf) return;
-    setIsGeneratingProPLPdf(true);
-
-    try {
-      const { blob, filename } = await buildProPLPdfBlob();
       const file = new File([blob], filename, { type: 'application/pdf' });
       const navAny = navigator as any;
       const canShareFiles = !!navAny.share && (!navAny.canShare || navAny.canShare({ files: [file] }));
@@ -4890,13 +4849,14 @@ const demoMileageTrips: MileageTrip[] = [
         });
         showToast('Share opened', 'success');
       } else {
-        downloadBlobFile(blob, filename);
-        showToast('Sharing not available on this device. PDF downloaded instead.', 'success');
+        await html2pdf().set(opt).from(clone).save();
+        showToast('PDF downloaded', 'success');
       }
     } catch (error) {
-      console.error('P&L share error:', error);
+      console.error('P&L Share error:', error);
       showToast('Share failed', 'error');
     } finally {
+      if (cloneWrapper && cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
       setIsGeneratingProPLPdf(false);
     }
   };
@@ -5616,7 +5576,27 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                       <span className="hidden sm:inline">Back to Edit</span>
                     </button>
                     <span className="font-bold text-sm text-gray-900 uppercase tracking-wider">Invoice Preview</span>
-              </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={shareInvoicePDF}
+                        disabled={isGeneratingPdf}
+                        className={`flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-slate-700 hover:bg-slate-800 rounded-lg transition-all ${isGeneratingPdf ? 'opacity-70 cursor-wait' : ''}`}
+                      >
+                        {isGeneratingPdf ? <Loader2 size={16} className="animate-spin" /> : <Share2 size={16} />}
+                        <span className="hidden sm:inline">{isGeneratingPdf ? 'Preparing...' : 'Share'}</span>
+                      </button>
+
+                      <button 
+                        onClick={generateInvoicePDF}
+                        disabled={isGeneratingPdf}
+                        className={`flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-all ${isGeneratingPdf ? 'opacity-70 cursor-wait' : ''}`}
+                      >
+                        {isGeneratingPdf ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                        <span className="hidden sm:inline">{isGeneratingPdf ? 'Generating...' : 'Download PDF'}</span>
+                      </button>
+                      <button onClick={() => setIsPdfPreviewOpen(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-500"><X size={20} /></button>
+                    </div>
+                </div>
                 {/* PDF Preview Content - Fixed text colors for readability */}
                 <div id="visible-pdf-preview-content" className="p-4 sm:p-6 md:p-12 bg-white min-h-[1000px]">
                     {selectedInvoiceForDoc.status === 'void' && <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0"><div className="transform -rotate-45 text-red-100 text-[150px] font-extrabold opacity-50 border-8 border-red-100 p-10 rounded-3xl">VOID</div></div>}
@@ -7055,11 +7035,11 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                     </div>
                   </div>
                   <button
-                    onClick={handleExportPLPDF}
+                    onClick={() => setShowProPLPreview(true)}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold text-sm flex items-center gap-2 transition-colors"
                   >
                     <Eye className="w-4 h-4" />
-                    <span>Export PDF</span>
+                    <span>Preview &amp; Share</span>
                   </button>
                 </div>
 
@@ -7136,7 +7116,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                 <div className="mt-4 p-4 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700">
                   <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Statement hidden</div>
                   <div className="text-sm text-slate-600 dark:text-slate-300 mt-1">
-                    Tap <span className="font-bold">Preview &amp; Export</span> to view and export the full Profit &amp; Loss.
+                    Tap <span className="font-bold">Preview &amp; Share</span> to view the full Profit &amp; Loss and share the PDF.
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mt-4">
@@ -7880,6 +7860,26 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                       </div>
 
                       <div className="flex items-center gap-2">
+                        {!isGeneratingPLPdf && !plExportRequested && (
+                          <>
+                            <button
+                              onClick={sharePLPDF}
+                              className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-semibold text-sm flex items-center gap-2 transition-colors"
+                            >
+                              <Share2 className="w-4 h-4" />
+                              <span className="hidden sm:inline">Share</span>
+                            </button>
+
+                            <button
+                              onClick={() => setPlExportRequested(true)}
+                              className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold text-sm flex items-center gap-2 transition-colors"
+                            >
+                              <Download className="w-4 h-4" />
+                              <span className="hidden sm:inline">Download PDF</span>
+                            </button>
+                          </>
+                        )}
+
                         <button
                           onClick={() => { setPlExportRequested(false); closePLPreview(); }}
                           className="w-11 h-11 flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
@@ -8018,14 +8018,103 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                     </div>
 
                     {/* Modal Footer */}
-                    <div className="flex items-center justify-end gap-3 p-6 border-t border-slate-200 bg-white">
+                    <div className="flex items-center justify-end gap-3 p-6 border-t border-slate-200">
                       <button
-                        onClick={sharePLPDF}
-                        disabled={isGeneratingPLPdf}
-                        className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={closePLPreview}
+                        className="px-6 py-3 border border-slate-300 dark:border-slate-700 rounded-lg font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
                       >
-                        {isGeneratingPLPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-                        {isGeneratingPLPdf ? 'Preparing...' : 'SHARE'}
+                        Close
+                      </button>
+                      <button
+                        onClick={async () => {
+                          setIsGeneratingPDF(true);
+                          try {
+                            const element = document.getElementById('pl-pdf-preview-content');
+                            if (!element) throw new Error('Preview content not found');
+                            
+                            const periodLabel = plPeriodType === 'month' 
+                              ? referenceDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+                              : plPeriodType === 'quarter' 
+                                ? `Q${Math.floor(referenceDate.getMonth() / 3) + 1} ${referenceDate.getFullYear()}`
+                                : plPeriodType === 'year'
+                                  ? referenceDate.getFullYear().toString()
+                                  : 'All-Time';
+                            
+                            // IMPORTANT (iPhone/Safari): getBoundingClientRect() can under-report height for
+                            // long, scrollable content, which causes the bottom of the PDF (notes/footer) to be cut off.
+                            // Solution: clone to an off-screen wrapper (no scroll clipping) and size the PDF
+                            // to the full scrollHeight so the export is ONE long page (no page breaks).
+                            let cloneWrapper: HTMLDivElement | null = null;
+                            try {
+                              const source = element as HTMLElement;
+
+                              cloneWrapper = document.createElement('div');
+                              cloneWrapper.style.position = 'fixed';
+                              cloneWrapper.style.left = '-100000px';
+                              cloneWrapper.style.top = '0';
+                              cloneWrapper.style.width = `${source.scrollWidth}px`;
+                              cloneWrapper.style.background = '#ffffff';
+                              cloneWrapper.style.padding = '0';
+                              cloneWrapper.style.margin = '0';
+                              cloneWrapper.style.zIndex = '-1';
+
+                              const clone = prepareProfitLossPdfClone(source);
+
+                              cloneWrapper.appendChild(clone);
+                              document.body.appendChild(cloneWrapper);
+
+                              await new Promise(resolve => requestAnimationFrame(() => resolve(true)));
+
+                              const contentWidth = clone.scrollWidth;
+                              const contentHeight = clone.scrollHeight;
+
+                              const pxToMm = 0.264583; // 96 DPI px -> mm
+                              const pageWidthMm = 210;
+                              const marginMm = 8;
+                              const contentWidthMm = pageWidthMm - (marginMm * 2);
+
+                              const scaleFactor = contentWidthMm / (contentWidth * pxToMm);
+                              const pageHeightMm = Math.ceil((contentHeight * pxToMm * scaleFactor) + (marginMm * 2) + 2);
+
+                              const opt = {
+                                margin: [marginMm, marginMm, marginMm, marginMm],
+                                filename: `PL-Statement-${periodLabel.replace(/\s+/g, '-')}.pdf`,
+                                image: { type: 'jpeg', quality: 0.95 },
+                                html2canvas: {
+                                  scale: 2,
+                                  useCORS: true,
+                                  backgroundColor: '#ffffff',
+                                  logging: false,
+                                  scrollY: 0,
+                                  scrollX: 0,
+                                  windowWidth: contentWidth,
+                                  windowHeight: contentHeight
+                                },
+                                jsPDF: {
+                                  unit: 'mm',
+                                  format: [pageWidthMm, Math.max(297, pageHeightMm)],
+                                  orientation: 'portrait'
+                                },
+                                pagebreak: { mode: 'avoid-all' }
+                              };
+
+                              await html2pdf().set(opt).from(clone).save();
+                            } finally {
+                              if (cloneWrapper && cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
+                            }
+                            showToast('PDF exported successfully!', 'success');
+                            setTimeout(() => closePLPreview(), 1000);
+                          } catch (error) {
+                            console.error('PDF generation error:', error);
+                            showToast('Failed to generate PDF. Please try again.', 'error');
+                          }
+                          setIsGeneratingPDF(false);
+                        }}
+                        disabled={isGeneratingPDF}
+                        className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
+                      >
+                        <Download className="w-4 h-4" />
+                        {isGeneratingPDF ? 'Generating...' : 'Export PDF'}
                       </button>
                     </div>
                   </div>
@@ -8077,266 +8166,293 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
               </div>
            </div>
         )}
-        {/* Hidden P&L PDF render source */}
-        <div aria-hidden="true" className="fixed -left-[100000px] top-0 opacity-0 pointer-events-none">
-          <div className="p-4">
-            <div id="pro-pl-pdf-content" className="bg-white text-gray-900 rounded-lg shadow-lg mx-auto overflow-hidden" style={{ fontFamily: 'system-ui, -apple-system, sans-serif', width: '700px', maxWidth: '100%' }}>
-              {/* Report Header - Left Aligned */}
-              <div className="px-5 py-5 border-b-2 border-gray-300 bg-gray-50">
-                <div>
-                  {settings.businessLogo && (
-                    <img
-                      src={settings.businessLogo}
-                      alt="Logo"
-                      className="h-10 sm:h-14 w-auto object-contain mb-2"
-                      crossOrigin="anonymous"
-                    />
-                  )}
-                  <h1 className="text-xl font-bold text-gray-900 uppercase tracking-wide">{settings.businessName}</h1>
-                  <h2 className="text-base font-semibold text-gray-700 mt-1">Profit & Loss Statement</h2>
-                  <p className="text-sm text-gray-600 mt-2">
-                    Period: {proPLData.startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – {proPLData.endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">{plAccountingBasis === 'cash' ? 'Cash' : 'Accrual'} Basis | USD | Generated {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+
+        {/* Pro P&L Preview Modal - OUTSIDE Reports conditional for proper rendering */}
+        {showProPLPreview && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-stretch justify-stretch p-0 modal-overlay">
+            <div className="bg-gray-100 w-full h-full overflow-hidden flex flex-col">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between px-3 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] sm:p-4 border-b border-gray-300 bg-white flex-shrink-0">
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setShowProPLPreview(false)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <ArrowLeft className="w-5 h-5 text-gray-600" />
+                  </button>
+                  <span className="font-bold text-sm text-gray-900">P&L Preview</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={shareProPLPDF}
+                    disabled={isGeneratingProPLPdf}
+                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-semibold text-sm flex items-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                    {isGeneratingProPLPdf ? <Loader2 size={16} className="animate-spin" /> : <Share2 size={16} />}
+                    <span>{isGeneratingProPLPdf ? 'Preparing...' : 'SHARE'}</span>
+                  </button>
                 </div>
               </div>
 
-              {/* Column Headers */}
-              <div className="px-5 py-2 bg-gray-100 border-b border-gray-300">
-                <div className="flex items-center text-xs font-bold text-gray-600 uppercase">
-                  <div className="flex-1 min-w-0">Account</div>
-                  <div className="w-28 text-right flex-shrink-0">Amount</div>
-                  <div className="w-16 text-right flex-shrink-0">% Rev</div>
-                </div>
-              </div>
-
-              {/* Report Body */}
-              <div className="px-5 py-3">
-                {/* REVENUE - with category breakdown */}
-                <div className="mb-5">
-                  <div className="font-bold text-sm text-gray-900 uppercase tracking-wide py-2 border-b border-gray-200">Revenue</div>
-                  
-                  {/* Income by Category */}
-                  {Object.entries(proPLData.incomeByCategory)
-                    .sort(([,a], [,b]) => b - a)
-                    .map(([category, amount]) => (
-                      <div key={category} className="flex items-center py-1.5">
-                        <div className="flex-1 pl-4 text-gray-700 truncate">{category}</div>
-                        <div className="w-28 text-right font-medium tabular-nums">{formatCurrency.format(amount)}</div>
-                        <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((amount / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
-                      </div>
-                    ))}
-                  
-                  {/* Total Gross Sales (if multiple categories) */}
-                  {Object.keys(proPLData.incomeByCategory).length > 1 && (
-                    <div className="flex items-center py-1.5 font-semibold border-t border-gray-200 mt-1">
-                      <div className="flex-1 pl-2 text-gray-800">Total Gross Sales</div>
-                      <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.salesServices)}</div>
-                      <div className="w-16 text-right text-xs"></div>
+              {/* PDF Content */}
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+                <div id="pro-pl-pdf-content" className="bg-white text-gray-900 rounded-lg shadow-lg mx-auto overflow-hidden" style={{ fontFamily: 'system-ui, -apple-system, sans-serif', width: '700px', maxWidth: '100%' }}>
+                  {/* Report Header - Left Aligned */}
+                  <div className="px-5 py-5 border-b-2 border-gray-300 bg-gray-50">
+                    <div>
+                      {settings.businessLogo && (
+                        <img
+                          src={settings.businessLogo}
+                          alt="Logo"
+                          className="h-10 sm:h-14 w-auto object-contain mb-2"
+                          crossOrigin="anonymous"
+                        />
+                      )}
+                      <h1 className="text-xl font-bold text-gray-900 uppercase tracking-wide">{settings.businessName}</h1>
+                      <h2 className="text-base font-semibold text-gray-700 mt-1">Profit & Loss Statement</h2>
+                      <p className="text-sm text-gray-600 mt-2">
+                        Period: {proPLData.startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – {proPLData.endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">{plAccountingBasis === 'cash' ? 'Cash' : 'Accrual'} Basis | USD | Generated {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
                     </div>
-                  )}
-                  
-                  {proPLData.refunds > 0 && (
-                    <div className="flex items-center py-2">
-                      <div className="flex-1 pl-4 text-gray-700 italic">Less: Returns & Refunds</div>
-                      <div className="w-28 text-right font-medium tabular-nums text-red-600">({formatCurrency.format(proPLData.refunds)})</div>
-                      <div className="w-16 text-right"></div>
-                    </div>
-                  )}
-                  <div className="flex items-center py-2 font-bold border-t border-gray-300 mt-2">
-                    <div className="flex-1 text-gray-900">NET REVENUE</div>
-                    <div className="w-28 text-right tabular-nums text-emerald-700">{formatCurrency.format(proPLData.netRevenue)}</div>
-                    <div className="w-16 text-right text-xs">100.0%</div>
                   </div>
-                </div>
 
-                {/* COGS - with category breakdown */}
-                {proPLData.cogs > 0 && (
-                  <div className="mb-5">
-                    <div className="font-bold text-sm text-gray-900 uppercase tracking-wide py-2 border-b border-gray-200">Cost of Goods Sold</div>
-                    
-                    {/* COGS by Category */}
-                    {Object.entries(proPLData.cogsByCategory)
-                      .sort(([,a], [,b]) => b - a)
-                      .map(([category, amount]) => (
-                        <div key={category} className="flex items-center py-1.5">
-                          <div className="flex-1 pl-4 text-gray-700 truncate">{category}</div>
-                          <div className="w-28 text-right font-medium tabular-nums">{formatCurrency.format(amount)}</div>
-                          <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((amount / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                  {/* Column Headers */}
+                  <div className="px-5 py-2 bg-gray-100 border-b border-gray-300">
+                    <div className="flex items-center text-xs font-bold text-gray-600 uppercase">
+                      <div className="flex-1 min-w-0">Account</div>
+                      <div className="w-28 text-right flex-shrink-0">Amount</div>
+                      <div className="w-16 text-right flex-shrink-0">% Rev</div>
+                    </div>
+                  </div>
+
+                  {/* Report Body */}
+                  <div className="px-5 py-3">
+                    {/* REVENUE - with category breakdown */}
+                    <div className="mb-5">
+                      <div className="font-bold text-sm text-gray-900 uppercase tracking-wide py-2 border-b border-gray-200">Revenue</div>
+                      
+                      {/* Income by Category */}
+                      {Object.entries(proPLData.incomeByCategory)
+                        .sort(([,a], [,b]) => b - a)
+                        .map(([category, amount]) => (
+                          <div key={category} className="flex items-center py-1.5">
+                            <div className="flex-1 pl-4 text-gray-700 truncate">{category}</div>
+                            <div className="w-28 text-right font-medium tabular-nums">{formatCurrency.format(amount)}</div>
+                            <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((amount / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                          </div>
+                        ))}
+                      
+                      {/* Total Gross Sales (if multiple categories) */}
+                      {Object.keys(proPLData.incomeByCategory).length > 1 && (
+                        <div className="flex items-center py-1.5 font-semibold border-t border-gray-200 mt-1">
+                          <div className="flex-1 pl-2 text-gray-800">Total Gross Sales</div>
+                          <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.salesServices)}</div>
+                          <div className="w-16 text-right text-xs"></div>
                         </div>
-                      ))}
-                    
-                    {/* Total COGS (if multiple categories) */}
-                    {Object.keys(proPLData.cogsByCategory).length > 1 && (
-                      <div className="flex items-center py-1.5 font-semibold border-t border-gray-200 mt-1">
-                        <div className="flex-1 pl-2 text-gray-800">Total COGS</div>
-                        <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.cogs)}</div>
-                        <div className="w-16 text-right text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.cogs / proPLData.netRevenue) * 100).toFixed(1)}%` : '—'}</div>
+                      )}
+                      
+                      {proPLData.refunds > 0 && (
+                        <div className="flex items-center py-2">
+                          <div className="flex-1 pl-4 text-gray-700 italic">Less: Returns & Refunds</div>
+                          <div className="w-28 text-right font-medium tabular-nums text-red-600">({formatCurrency.format(proPLData.refunds)})</div>
+                          <div className="w-16 text-right"></div>
+                        </div>
+                      )}
+                      <div className="flex items-center py-2 font-bold border-t border-gray-300 mt-2">
+                        <div className="flex-1 text-gray-900">NET REVENUE</div>
+                        <div className="w-28 text-right tabular-nums text-emerald-700">{formatCurrency.format(proPLData.netRevenue)}</div>
+                        <div className="w-16 text-right text-xs">100.0%</div>
+                      </div>
+                    </div>
+
+                    {/* COGS - with category breakdown */}
+                    {proPLData.cogs > 0 && (
+                      <div className="mb-5">
+                        <div className="font-bold text-sm text-gray-900 uppercase tracking-wide py-2 border-b border-gray-200">Cost of Goods Sold</div>
+                        
+                        {/* COGS by Category */}
+                        {Object.entries(proPLData.cogsByCategory)
+                          .sort(([,a], [,b]) => b - a)
+                          .map(([category, amount]) => (
+                            <div key={category} className="flex items-center py-1.5">
+                              <div className="flex-1 pl-4 text-gray-700 truncate">{category}</div>
+                              <div className="w-28 text-right font-medium tabular-nums">{formatCurrency.format(amount)}</div>
+                              <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((amount / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                            </div>
+                          ))}
+                        
+                        {/* Total COGS (if multiple categories) */}
+                        {Object.keys(proPLData.cogsByCategory).length > 1 && (
+                          <div className="flex items-center py-1.5 font-semibold border-t border-gray-200 mt-1">
+                            <div className="flex-1 pl-2 text-gray-800">Total COGS</div>
+                            <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.cogs)}</div>
+                            <div className="w-16 text-right text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.cogs / proPLData.netRevenue) * 100).toFixed(1)}%` : '—'}</div>
+                          </div>
+                        )}
+                        
+                        <div className="flex items-center py-2 font-bold border-t border-gray-300 mt-2">
+                          <div className="flex-1 text-gray-900">GROSS PROFIT</div>
+                          <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.grossProfit)}</div>
+                          <div className="w-16 text-right text-xs">{proPLData.grossMargin.toFixed(1)}%</div>
+                        </div>
                       </div>
                     )}
-                    
-                    <div className="flex items-center py-2 font-bold border-t border-gray-300 mt-2">
-                      <div className="flex-1 text-gray-900">GROSS PROFIT</div>
-                      <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.grossProfit)}</div>
-                      <div className="w-16 text-right text-xs">{proPLData.grossMargin.toFixed(1)}%</div>
+
+                    {/* OPERATING EXPENSES - Industry Standard Grouped */}
+                    <div className="mb-5">
+                      <div className="font-bold text-sm text-gray-900 uppercase tracking-wide py-2 border-b border-gray-200">Operating Expenses</div>
+                      
+                      {/* Payroll & Labor */}
+                      {proPLData.payrollTotal > 0 && (
+                        <>
+                          <div className="flex items-center py-1.5 font-semibold bg-gray-50 -mx-5 px-5 mt-1">
+                            <div className="flex-1 text-gray-800">Payroll & Labor</div>
+                            <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.payrollTotal)}</div>
+                            <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.payrollTotal / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                          </div>
+                          {proPLData.payrollItems.map(([cat, amt]) => (
+                            <div key={cat} className="flex items-center py-1">
+                              <div className="flex-1 pl-6 text-gray-600 truncate">{cat}</div>
+                              <div className="w-28 text-right tabular-nums text-gray-600">{formatCurrency.format(amt)}</div>
+                              <div className="w-16 text-right text-gray-400 text-xs">{proPLData.netRevenue > 0 ? `${((amt / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      
+                      {/* Occupancy & Facilities */}
+                      {proPLData.occupancyTotal > 0 && (
+                        <>
+                          <div className="flex items-center py-1.5 font-semibold bg-gray-50 -mx-5 px-5 mt-1">
+                            <div className="flex-1 text-gray-800">Occupancy & Facilities</div>
+                            <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.occupancyTotal)}</div>
+                            <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.occupancyTotal / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                          </div>
+                          {proPLData.occupancyItems.map(([cat, amt]) => (
+                            <div key={cat} className="flex items-center py-1">
+                              <div className="flex-1 pl-6 text-gray-600 truncate">{cat}</div>
+                              <div className="w-28 text-right tabular-nums text-gray-600">{formatCurrency.format(amt)}</div>
+                              <div className="w-16 text-right text-gray-400 text-xs">{proPLData.netRevenue > 0 ? `${((amt / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      
+                      {/* Marketing & Advertising */}
+                      {proPLData.marketingTotal > 0 && (
+                        <>
+                          <div className="flex items-center py-1.5 font-semibold bg-gray-50 -mx-5 px-5 mt-1">
+                            <div className="flex-1 text-gray-800">Marketing & Advertising</div>
+                            <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.marketingTotal)}</div>
+                            <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.marketingTotal / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                          </div>
+                          {proPLData.marketingItems.map(([cat, amt]) => (
+                            <div key={cat} className="flex items-center py-1">
+                              <div className="flex-1 pl-6 text-gray-600 truncate">{cat}</div>
+                              <div className="w-28 text-right tabular-nums text-gray-600">{formatCurrency.format(amt)}</div>
+                              <div className="w-16 text-right text-gray-400 text-xs">{proPLData.netRevenue > 0 ? `${((amt / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      
+                      {/* General & Administrative */}
+                      {proPLData.gaTotal > 0 && (
+                        <>
+                          <div className="flex items-center py-1.5 font-semibold bg-gray-50 -mx-5 px-5 mt-1">
+                            <div className="flex-1 text-gray-800">General & Administrative</div>
+                            <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.gaTotal)}</div>
+                            <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.gaTotal / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                          </div>
+                          {proPLData.gaItems.map(([cat, amt]) => (
+                            <div key={cat} className="flex items-center py-1">
+                              <div className="flex-1 pl-6 text-gray-600 truncate">{cat}</div>
+                              <div className="w-28 text-right tabular-nums text-gray-600">{formatCurrency.format(amt)}</div>
+                              <div className="w-16 text-right text-gray-400 text-xs">{proPLData.netRevenue > 0 ? `${((amt / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      
+                      {/* Other Expenses */}
+                      {proPLData.otherExpenses > 0 && (
+                        <div className="flex items-center py-1.5 font-semibold bg-gray-50 -mx-5 px-5 mt-1">
+                          <div className="flex-1 text-gray-800">Other Expenses</div>
+                          <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.otherExpenses)}</div>
+                          <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.otherExpenses / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                        </div>
+                      )}
+                      
+                      <div className="flex items-center py-2 font-bold border-t-2 border-gray-400 mt-3">
+                        <div className="flex-1 text-gray-900">TOTAL OPERATING EXPENSES</div>
+                        <div className="w-28 text-right tabular-nums text-red-700">{formatCurrency.format(proPLData.totalOpex)}</div>
+                        <div className="w-16 text-right text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.totalOpex / proPLData.netRevenue) * 100).toFixed(1)}%` : '—'}</div>
+                      </div>
                     </div>
-                  </div>
-                )}
 
-                {/* OPERATING EXPENSES - Industry Standard Grouped */}
-                <div className="mb-5">
-                  <div className="font-bold text-sm text-gray-900 uppercase tracking-wide py-2 border-b border-gray-200">Operating Expenses</div>
-                  
-                  {/* Payroll & Labor */}
-                  {proPLData.payrollTotal > 0 && (
-                    <>
-                      <div className="flex items-center py-1.5 font-semibold bg-gray-50 -mx-5 px-5 mt-1">
-                        <div className="flex-1 text-gray-800">Payroll & Labor</div>
-                        <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.payrollTotal)}</div>
-                        <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.payrollTotal / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                    {/* OPERATING INCOME */}
+                    <div className="flex items-center py-3 font-bold bg-gray-100 -mx-5 px-5 mb-5">
+                      <div className="flex-1 text-gray-900 uppercase">Operating Income</div>
+                      <div className={`w-28 text-right tabular-nums ${proPLData.operatingIncome >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                        {proPLData.operatingIncome < 0 ? `(${formatCurrency.format(Math.abs(proPLData.operatingIncome))})` : formatCurrency.format(proPLData.operatingIncome)}
                       </div>
-                      {proPLData.payrollItems.map(([cat, amt]) => (
-                        <div key={cat} className="flex items-center py-1">
-                          <div className="flex-1 pl-6 text-gray-600 truncate">{cat}</div>
-                          <div className="w-28 text-right tabular-nums text-gray-600">{formatCurrency.format(amt)}</div>
-                          <div className="w-16 text-right text-gray-400 text-xs">{proPLData.netRevenue > 0 ? `${((amt / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
-                        </div>
-                      ))}
-                    </>
-                  )}
-                  
-                  {/* Occupancy & Facilities */}
-                  {proPLData.occupancyTotal > 0 && (
-                    <>
-                      <div className="flex items-center py-1.5 font-semibold bg-gray-50 -mx-5 px-5 mt-1">
-                        <div className="flex-1 text-gray-800">Occupancy & Facilities</div>
-                        <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.occupancyTotal)}</div>
-                        <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.occupancyTotal / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
-                      </div>
-                      {proPLData.occupancyItems.map(([cat, amt]) => (
-                        <div key={cat} className="flex items-center py-1">
-                          <div className="flex-1 pl-6 text-gray-600 truncate">{cat}</div>
-                          <div className="w-28 text-right tabular-nums text-gray-600">{formatCurrency.format(amt)}</div>
-                          <div className="w-16 text-right text-gray-400 text-xs">{proPLData.netRevenue > 0 ? `${((amt / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
-                        </div>
-                      ))}
-                    </>
-                  )}
-                  
-                  {/* Marketing & Advertising */}
-                  {proPLData.marketingTotal > 0 && (
-                    <>
-                      <div className="flex items-center py-1.5 font-semibold bg-gray-50 -mx-5 px-5 mt-1">
-                        <div className="flex-1 text-gray-800">Marketing & Advertising</div>
-                        <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.marketingTotal)}</div>
-                        <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.marketingTotal / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
-                      </div>
-                      {proPLData.marketingItems.map(([cat, amt]) => (
-                        <div key={cat} className="flex items-center py-1">
-                          <div className="flex-1 pl-6 text-gray-600 truncate">{cat}</div>
-                          <div className="w-28 text-right tabular-nums text-gray-600">{formatCurrency.format(amt)}</div>
-                          <div className="w-16 text-right text-gray-400 text-xs">{proPLData.netRevenue > 0 ? `${((amt / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
-                        </div>
-                      ))}
-                    </>
-                  )}
-                  
-                  {/* General & Administrative */}
-                  {proPLData.gaTotal > 0 && (
-                    <>
-                      <div className="flex items-center py-1.5 font-semibold bg-gray-50 -mx-5 px-5 mt-1">
-                        <div className="flex-1 text-gray-800">General & Administrative</div>
-                        <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.gaTotal)}</div>
-                        <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.gaTotal / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
-                      </div>
-                      {proPLData.gaItems.map(([cat, amt]) => (
-                        <div key={cat} className="flex items-center py-1">
-                          <div className="flex-1 pl-6 text-gray-600 truncate">{cat}</div>
-                          <div className="w-28 text-right tabular-nums text-gray-600">{formatCurrency.format(amt)}</div>
-                          <div className="w-16 text-right text-gray-400 text-xs">{proPLData.netRevenue > 0 ? `${((amt / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
-                        </div>
-                      ))}
-                    </>
-                  )}
-                  
-                  {/* Other Expenses */}
-                  {proPLData.otherExpenses > 0 && (
-                    <div className="flex items-center py-1.5 font-semibold bg-gray-50 -mx-5 px-5 mt-1">
-                      <div className="flex-1 text-gray-800">Other Expenses</div>
-                      <div className="w-28 text-right tabular-nums">{formatCurrency.format(proPLData.otherExpenses)}</div>
-                      <div className="w-16 text-right text-gray-500 text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.otherExpenses / proPLData.netRevenue) * 100).toFixed(1)}%` : ''}</div>
+                      <div className="w-16 text-right text-xs">{proPLData.operatingMargin.toFixed(1)}%</div>
                     </div>
-                  )}
-                  
-                  <div className="flex items-center py-2 font-bold border-t-2 border-gray-400 mt-3">
-                    <div className="flex-1 text-gray-900">TOTAL OPERATING EXPENSES</div>
-                    <div className="w-28 text-right tabular-nums text-red-700">{formatCurrency.format(proPLData.totalOpex)}</div>
-                    <div className="w-16 text-right text-xs">{proPLData.netRevenue > 0 ? `${((proPLData.totalOpex / proPLData.netRevenue) * 100).toFixed(1)}%` : '—'}</div>
-                  </div>
-                </div>
 
-                {/* OPERATING INCOME */}
-                <div className="flex items-center py-3 font-bold bg-gray-100 -mx-5 px-5 mb-5">
-                  <div className="flex-1 text-gray-900 uppercase">Operating Income</div>
-                  <div className={`w-28 text-right tabular-nums ${proPLData.operatingIncome >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                    {proPLData.operatingIncome < 0 ? `(${formatCurrency.format(Math.abs(proPLData.operatingIncome))})` : formatCurrency.format(proPLData.operatingIncome)}
-                  </div>
-                  <div className="w-16 text-right text-xs">{proPLData.operatingMargin.toFixed(1)}%</div>
-                </div>
-
-                {/* OTHER INCOME/EXPENSE */}
-                {(proPLData.interestIncome > 0 || proPLData.interestExpense > 0) && (
-                  <div className="mb-5">
-                    <div className="font-bold text-sm text-gray-900 uppercase tracking-wide py-2 border-b border-gray-200">Other Income / Expense</div>
-                    {proPLData.interestIncome > 0 && (
-                      <div className="flex items-center py-2">
-                        <div className="flex-1 pl-4 text-gray-700">Interest Income</div>
-                        <div className="w-28 text-right font-medium tabular-nums text-emerald-600">{formatCurrency.format(proPLData.interestIncome)}</div>
-                        <div className="w-16 text-right"></div>
+                    {/* OTHER INCOME/EXPENSE */}
+                    {(proPLData.interestIncome > 0 || proPLData.interestExpense > 0) && (
+                      <div className="mb-5">
+                        <div className="font-bold text-sm text-gray-900 uppercase tracking-wide py-2 border-b border-gray-200">Other Income / Expense</div>
+                        {proPLData.interestIncome > 0 && (
+                          <div className="flex items-center py-2">
+                            <div className="flex-1 pl-4 text-gray-700">Interest Income</div>
+                            <div className="w-28 text-right font-medium tabular-nums text-emerald-600">{formatCurrency.format(proPLData.interestIncome)}</div>
+                            <div className="w-16 text-right"></div>
+                          </div>
+                        )}
+                        {proPLData.interestExpense > 0 && (
+                          <div className="flex items-center py-2">
+                            <div className="flex-1 pl-4 text-gray-700">Interest Expense</div>
+                            <div className="w-28 text-right font-medium tabular-nums text-red-600">({formatCurrency.format(proPLData.interestExpense)})</div>
+                            <div className="w-16 text-right"></div>
+                          </div>
+                        )}
+                        <div className="flex items-center py-2 font-bold border-t border-gray-200 mt-2">
+                          <div className="flex-1 text-gray-900">NET OTHER INCOME</div>
+                          <div className={`w-28 text-right tabular-nums ${proPLData.netOtherIncome >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                            {proPLData.netOtherIncome < 0 ? `(${formatCurrency.format(Math.abs(proPLData.netOtherIncome))})` : formatCurrency.format(proPLData.netOtherIncome)}
+                          </div>
+                          <div className="w-16 text-right"></div>
+                        </div>
                       </div>
                     )}
-                    {proPLData.interestExpense > 0 && (
-                      <div className="flex items-center py-2">
-                        <div className="flex-1 pl-4 text-gray-700">Interest Expense</div>
-                        <div className="w-28 text-right font-medium tabular-nums text-red-600">({formatCurrency.format(proPLData.interestExpense)})</div>
-                        <div className="w-16 text-right"></div>
+
+                    {/* NET INCOME */}
+                    <div className="flex items-center py-4 font-bold bg-gray-900 text-white -mx-5 px-5 rounded-b-lg">
+                      <div className="flex-1 uppercase text-lg">Net Income</div>
+                      <div className={`w-28 text-right tabular-nums text-lg ${proPLData.netIncome >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {proPLData.netIncome < 0 ? `(${formatCurrency.format(Math.abs(proPLData.netIncome))})` : formatCurrency.format(proPLData.netIncome)}
                       </div>
-                    )}
-                    <div className="flex items-center py-2 font-bold border-t border-gray-200 mt-2">
-                      <div className="flex-1 text-gray-900">NET OTHER INCOME</div>
-                      <div className={`w-28 text-right tabular-nums ${proPLData.netOtherIncome >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                        {proPLData.netOtherIncome < 0 ? `(${formatCurrency.format(Math.abs(proPLData.netOtherIncome))})` : formatCurrency.format(proPLData.netOtherIncome)}
-                      </div>
-                      <div className="w-16 text-right"></div>
+                      <div className="w-16 text-right text-xs text-gray-300">{proPLData.netMargin.toFixed(1)}%</div>
                     </div>
                   </div>
-                )}
 
-                {/* NET INCOME */}
-                <div className="flex items-center py-4 font-bold bg-gray-900 text-white -mx-5 px-5 rounded-b-lg">
-                  <div className="flex-1 uppercase text-lg">Net Income</div>
-                  <div className={`w-28 text-right tabular-nums text-lg ${proPLData.netIncome >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {proPLData.netIncome < 0 ? `(${formatCurrency.format(Math.abs(proPLData.netIncome))})` : formatCurrency.format(proPLData.netIncome)}
+                  {/* Notes */}
+                  <div className="px-5 py-4 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
+                    <div className="font-semibold text-gray-600 mb-1">Notes</div>
+                    <p>• {plAccountingBasis === 'cash' ? 'Cash' : 'Accrual'} Basis | {proPLData.transactionCount} transactions</p>
+                    {proPLData.uncategorizedCount > 0 && <p className="text-amber-600">• {proPLData.uncategorizedCount} uncategorized ({formatCurrency.format(proPLData.uncategorizedAmount)})</p>}
+                    <p>• Owner draws excluded | Management-use report. For internal business use only.</p>
                   </div>
-                  <div className="w-16 text-right text-xs text-gray-300">{proPLData.netMargin.toFixed(1)}%</div>
+
+                  {/* Footer */}
+                  <div className="px-5 py-3 border-t border-gray-200 text-center text-xs text-gray-400">
+                    <p>{settings.businessName} | P&L | {proPLData.periodLabel} | Prepared by Moniezi</p>
+                  </div>
                 </div>
-              </div>
-
-              {/* Notes */}
-              <div className="px-5 py-4 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
-                <div className="font-semibold text-gray-600 mb-1">Notes</div>
-                <p>• {plAccountingBasis === 'cash' ? 'Cash' : 'Accrual'} Basis | {proPLData.transactionCount} transactions</p>
-                {proPLData.uncategorizedCount > 0 && <p className="text-amber-600">• {proPLData.uncategorizedCount} uncategorized ({formatCurrency.format(proPLData.uncategorizedAmount)})</p>}
-                <p>• Owner draws excluded | Management-use report. For internal business use only.</p>
-              </div>
-
-              {/* Footer */}
-              <div className="px-5 py-3 border-t border-gray-200 text-center text-xs text-gray-400">
-                <p>{settings.businessName} | P&L | {proPLData.periodLabel} | Prepared by Moniezi</p>
               </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* ==================== CLIENTS PAGE ==================== */}
         {currentPage === Page.Clients && (
