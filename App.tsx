@@ -4308,44 +4308,36 @@ const demoMileageTrips: MileageTrip[] = [
     const clone = source.cloneNode(true) as HTMLElement;
     clone.style.height = 'auto';
     clone.style.maxHeight = 'none';
+    clone.style.minHeight = '0';
     clone.style.overflow = 'visible';
     clone.style.fontFamily = 'Arial, Helvetica, sans-serif';
-    clone.style.fontSize = '15px';
-    clone.style.lineHeight = '2.05';
     clone.style.letterSpacing = '0';
     clone.style.color = '#111827';
+    clone.style.background = '#ffffff';
+    clone.style.boxShadow = 'none';
 
     const style = document.createElement('style');
     style.textContent = `
-      * { box-sizing: border-box !important; }
+      * {
+        box-sizing: border-box !important;
+      }
       .truncate {
         white-space: normal !important;
         overflow: visible !important;
         text-overflow: clip !important;
       }
-      .flex.items-center {
-        align-items: flex-start !important;
-      }
       .tabular-nums {
         font-variant-numeric: tabular-nums !important;
       }
-      p, span, td, th, h1, h2, h3, h4, h5, h6 {
-        line-height: 2.05 !important;
-        padding-bottom: 6px !important;
-      }
-      .text-xs {
-        line-height: 2.1 !important;
-      }
-      .text-sm {
-        line-height: 2.05 !important;
-      }
-      .py-1, .py-1\.5, .py-2, .py-3, .py-4 {
-        padding-top: 12px !important;
-        padding-bottom: 14px !important;
-        min-height: 44px !important;
-      }
-      .border-t, .border-b {
+      .overflow-hidden,
+      .overflow-x-hidden,
+      .overflow-y-hidden {
         overflow: visible !important;
+      }
+      .shadow-lg,
+      .shadow-xl,
+      .shadow-2xl {
+        box-shadow: none !important;
       }
     `;
     clone.prepend(style);
@@ -4353,11 +4345,7 @@ const demoMileageTrips: MileageTrip[] = [
     clone.querySelectorAll<HTMLElement>('*').forEach((el) => {
       el.style.textRendering = 'geometricPrecision';
       el.style.webkitFontSmoothing = 'antialiased';
-      el.style.overflow = 'visible';
       const className = typeof el.className === 'string' ? el.className : '';
-      if (!el.style.lineHeight || el.style.lineHeight === 'normal') {
-        el.style.lineHeight = '2.05';
-      }
       if (className.includes('truncate')) {
         el.style.whiteSpace = 'normal';
         el.style.overflow = 'visible';
@@ -4366,26 +4354,6 @@ const demoMileageTrips: MileageTrip[] = [
       if (className.includes('tabular-nums')) {
         el.style.fontVariantNumeric = 'tabular-nums';
       }
-      if (className.includes('items-center')) {
-        el.style.alignItems = 'flex-start';
-      }
-      if (className.includes('py-1') || className.includes('py-2') || className.includes('py-3') || className.includes('py-4')) {
-        el.style.paddingTop = '12px';
-        el.style.paddingBottom = '14px';
-        el.style.minHeight = '44px';
-      }
-    });
-
-    clone.querySelectorAll<HTMLElement>('div, td, th').forEach((el) => {
-      if (el.children.length === 0) {
-        el.style.lineHeight = '2.05';
-        el.style.paddingBottom = el.style.paddingBottom || '6px';
-      }
-    });
-
-    clone.querySelectorAll<HTMLElement>('.text-xs, .text-sm, .text-base').forEach((el) => {
-      el.style.lineHeight = '2.05';
-      el.style.paddingBottom = '6px';
     });
 
     return clone;
@@ -4775,33 +4743,30 @@ const demoMileageTrips: MileageTrip[] = [
       cloneWrapper.style.position = 'fixed';
       cloneWrapper.style.left = '-100000px';
       cloneWrapper.style.top = '0';
-      cloneWrapper.style.width = `${source.scrollWidth}px`;
+      cloneWrapper.style.width = `${Math.max(source.scrollWidth, 700)}px`;
       cloneWrapper.style.background = '#ffffff';
       cloneWrapper.style.padding = '0';
       cloneWrapper.style.margin = '0';
       cloneWrapper.style.zIndex = '-1';
+      cloneWrapper.style.overflow = 'visible';
 
       const clone = prepareProfitLossPdfClone(source);
+      clone.style.width = `${Math.max(source.scrollWidth, 700)}px`;
+      clone.style.maxWidth = 'none';
+      clone.style.margin = '0';
       cloneWrapper.appendChild(clone);
       document.body.appendChild(cloneWrapper);
 
       await new Promise(resolve => requestAnimationFrame(() => resolve(true)));
 
-      const contentWidth = clone.scrollWidth;
-      const contentHeight = clone.scrollHeight;
-      const pxToMm = 0.264583;
-      const pageWidthMm = 210;
-      const marginMm = 8;
-      const contentWidthMm = pageWidthMm - (marginMm * 2);
-      const scaleFactor = contentWidthMm / (contentWidth * pxToMm);
-      const pageHeightMm = Math.ceil((contentHeight * pxToMm * scaleFactor) + (marginMm * 2) + 2);
-
+      const contentWidth = Math.max(clone.scrollWidth, clone.offsetWidth, 700);
+      const contentHeight = Math.max(clone.scrollHeight, clone.offsetHeight);
       const businessNameSafe = (settings.businessName || 'Business').replace(/[^a-z0-9]/gi, '_');
-      const startDateSafe = proPLData.startDate.toISOString().split('T')[0];
-      const filename = `PL_${businessNameSafe}_${startDateSafe}.pdf`;
+      const endDateSafe = proPLData.endDate.toISOString().split('T')[0];
+      const filename = `PL_${businessNameSafe}_${endDateSafe}.pdf`;
 
       const opt = {
-        margin: [marginMm, marginMm, marginMm, marginMm],
+        margin: [8, 8, 8, 8],
         filename,
         image: { type: 'jpeg', quality: 0.95 },
         html2canvas: {
@@ -4816,10 +4781,12 @@ const demoMileageTrips: MileageTrip[] = [
         },
         jsPDF: {
           unit: 'mm',
-          format: [pageWidthMm, Math.max(297, pageHeightMm)],
+          format: 'a4',
           orientation: 'portrait'
         },
-        pagebreak: { mode: 'avoid-all' }
+        pagebreak: {
+          mode: ['css', 'legacy']
+        }
       };
 
       const worker = html2pdf().set(opt).from(clone);
