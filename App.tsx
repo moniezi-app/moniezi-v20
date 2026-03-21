@@ -4716,28 +4716,24 @@ const demoMileageTrips: MileageTrip[] = [
   };
 
 
-  // Share PDF for Profit & Loss preview using the native OS share sheet when available.
-  // Falls back to a normal download only on browsers that cannot share files.
-  const shareProPLPDF = async () => {
-    if (isGeneratingProPLPdf) return;
-    setIsGeneratingProPLPdf(true);
+  const buildProPLPdfBlob = async (): Promise<{ blob: Blob; filename: string }> => {
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const element = document.getElementById('pro-pl-pdf-content');
+    if (!element) throw new Error('P&L content not found');
+
+    const images = Array.from(element.querySelectorAll('img'));
+    await Promise.all(images.map(img => {
+      if ((img as HTMLImageElement).complete) return Promise.resolve(true);
+      return new Promise(resolve => {
+        (img as HTMLImageElement).onload = () => resolve(true);
+        (img as HTMLImageElement).onerror = () => resolve(true);
+        setTimeout(() => resolve(true), 2000);
+      });
+    }));
+
     let cloneWrapper: HTMLDivElement | null = null;
 
     try {
-      await new Promise(resolve => setTimeout(resolve, 300));
-      const element = document.getElementById('pro-pl-pdf-content');
-      if (!element) throw new Error('P&L content not found');
-
-      const images = Array.from(element.querySelectorAll('img'));
-      await Promise.all(images.map(img => {
-        if ((img as HTMLImageElement).complete) return Promise.resolve(true);
-        return new Promise(resolve => {
-          (img as HTMLImageElement).onload = () => resolve(true);
-          (img as HTMLImageElement).onerror = () => resolve(true);
-          setTimeout(() => resolve(true), 2000);
-        });
-      }));
-
       const source = element as HTMLElement;
       cloneWrapper = document.createElement('div');
       cloneWrapper.style.position = 'fixed';
@@ -4804,6 +4800,48 @@ const demoMileageTrips: MileageTrip[] = [
         blob = pdf.output('blob');
       }
 
+      return { blob: blob!, filename };
+    } finally {
+      if (cloneWrapper && cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
+    }
+  };
+
+  const downloadBlobFile = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  };
+
+  const saveProPLPDF = async () => {
+    if (isGeneratingProPLPdf) return;
+    setIsGeneratingProPLPdf(true);
+
+    try {
+      const { blob, filename } = await buildProPLPdfBlob();
+      downloadBlobFile(blob, filename);
+      showToast('PDF downloaded', 'success');
+    } catch (error) {
+      console.error('P&L download error:', error);
+      showToast('Download failed', 'error');
+    } finally {
+      setIsGeneratingProPLPdf(false);
+    }
+  };
+
+  // Share PDF for Profit & Loss preview using the native OS share sheet when available.
+  // Falls back to a normal download only on browsers that cannot share files.
+  const shareProPLPDF = async () => {
+    if (isGeneratingProPLPdf) return;
+    setIsGeneratingProPLPdf(true);
+
+    try {
+      const { blob, filename } = await buildProPLPdfBlob();
       const file = new File([blob], filename, { type: 'application/pdf' });
       const navAny = navigator as any;
       const canShareFiles = !!navAny.share && (!navAny.canShare || navAny.canShare({ files: [file] }));
@@ -4816,14 +4854,13 @@ const demoMileageTrips: MileageTrip[] = [
         });
         showToast('Share opened', 'success');
       } else {
-        await html2pdf().set(opt).from(clone).save();
-        showToast('PDF downloaded', 'success');
+        downloadBlobFile(blob, filename);
+        showToast('Sharing not available on this device. PDF downloaded instead.', 'success');
       }
     } catch (error) {
       console.error('P&L Share error:', error);
       showToast('Share failed', 'error');
     } finally {
-      if (cloneWrapper && cloneWrapper.parentNode) cloneWrapper.parentNode.removeChild(cloneWrapper);
       setIsGeneratingProPLPdf(false);
     }
   };
@@ -8155,6 +8192,14 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                   >
                     {isGeneratingProPLPdf ? <Loader2 size={16} className="animate-spin" /> : <Share2 size={16} />}
                     <span>{isGeneratingProPLPdf ? 'Preparing...' : 'SHARE'}</span>
+                  </button>
+                  <button
+                    onClick={saveProPLPDF}
+                    disabled={isGeneratingProPLPdf}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold text-sm flex items-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                    {isGeneratingProPLPdf ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                    <span>{isGeneratingProPLPdf ? 'Preparing...' : 'Download PDF'}</span>
                   </button>
                 </div>
               </div>
