@@ -5497,16 +5497,25 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
       >
       {showDeferredInstallCta && deferredInstallPrompt && !isRunningStandalone && (
         <div className="absolute left-3 right-3 top-[max(76px,calc(env(safe-area-inset-top,0px)+72px))] z-[70] animate-in slide-in-from-top-2 duration-200">
-          <div className="rounded-[26px] border border-sky-300/35 bg-gradient-to-br from-slate-800/98 via-slate-800/96 to-blue-950/92 backdrop-blur-xl shadow-[0_18px_48px_rgba(2,6,23,0.52)] ring-1 ring-white/8 overflow-hidden">
-            <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_top_right,rgba(96,165,250,0.20),transparent_38%),radial-gradient(circle_at_bottom_left,rgba(125,211,252,0.10),transparent_32%)]" />
+          <div className={`rounded-[26px] backdrop-blur-xl overflow-hidden ${theme === 'dark'
+            ? 'border border-sky-300/35 bg-gradient-to-br from-slate-800/98 via-slate-800/96 to-blue-950/92 shadow-[0_18px_48px_rgba(2,6,23,0.52)] ring-1 ring-white/8'
+            : 'border border-blue-300/85 bg-gradient-to-br from-white via-slate-50 to-blue-50 shadow-[0_18px_44px_rgba(59,130,246,0.18)] ring-1 ring-blue-200/70'
+          }`}>
+            <div className={`absolute inset-0 pointer-events-none ${theme === 'dark'
+              ? 'bg-[radial-gradient(circle_at_top_right,rgba(96,165,250,0.20),transparent_38%),radial-gradient(circle_at_bottom_left,rgba(125,211,252,0.10),transparent_32%)]'
+              : 'bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.12),transparent_36%),radial-gradient(circle_at_bottom_left,rgba(147,197,253,0.22),transparent_34%)]'
+            }`} />
             <div className="relative px-4 py-4">
               <div className="flex items-start gap-3.5">
-                <div className="w-11 h-11 shrink-0 rounded-2xl bg-gradient-to-br from-sky-500/20 to-blue-600/10 border border-sky-300/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] flex items-center justify-center">
-                  <Download size={19} className="text-sky-200" />
+                <div className={`w-11 h-11 shrink-0 rounded-2xl flex items-center justify-center ${theme === 'dark'
+                  ? 'bg-gradient-to-br from-sky-500/20 to-blue-600/10 border border-sky-300/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                  : 'bg-gradient-to-br from-sky-100 to-blue-100 border border-blue-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_8px_18px_rgba(59,130,246,0.10)]'
+                }`}>
+                  <Download size={19} className={theme === 'dark' ? 'text-sky-200' : 'text-blue-700'} />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-[15px] font-bold text-white leading-tight">Install MONIEZI</div>
-                  <p className="text-[13px] leading-6 text-slate-200/90 mt-1 max-w-[38ch]">You can install the app now for faster access from your phone home screen.</p>
+                  <div className={`text-[15px] font-bold leading-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>Install MONIEZI</div>
+                  <p className={`text-[13px] leading-6 mt-1 max-w-[38ch] ${theme === 'dark' ? 'text-slate-200/90' : 'text-slate-700'}`}>You can install the app now for faster access from your phone home screen.</p>
                   <div className="mt-4 flex flex-wrap gap-3">
                     <button onClick={triggerDeferredInstallPrompt} className="min-w-[144px] px-4 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-white text-[15px] font-bold shadow-lg shadow-amber-950/30 transition-colors text-center">Install now</button>
                     <button onClick={() => setShowDeferredInstallCta(false)} className="min-w-[144px] px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 border border-blue-400/25 text-white text-[15px] font-bold shadow-lg shadow-blue-950/30 transition-colors text-center">Later</button>
